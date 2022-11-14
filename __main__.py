@@ -1,6 +1,8 @@
 import os
 import csv
 import argparse
+from yaml import load
+from yaml.loader import SafeLoader
 from bleach import clean
 from htmlmin import minify
 from joblib import Parallel
@@ -8,89 +10,128 @@ from joblib import delayed
 from itertools import islice
 from bs4 import BeautifulSoup
 from selenium import webdriver
-from dotenv import load_dotenv
 from serpapi import GoogleSearch
 
-# add blacklisted urls i.e amazon yotube 
-BLACKLIST_URLS = ["amazon", "youtube", "pinterest", "book"]
+YAML = data = load(
+    open("config.yaml", "r"), 
+    SafeLoader
+)
 
-# add whitelisted HTML tags
-WHITELIST_TAGS = ["b", "p", "a", "h1", "h2", "h3", "h4", "h5", "h6", "img", "ul", "ol", "li", "table", "thead", "tbody", "th", "tr"]
+MAX_WORKERS = YAML["max_workers"]
+SERP_API_KEY = YAML["serp_api_key"]
+BLACKLIST_URLS = YAML["blacklist_urls"]
+WHITELIST_TAGS = YAML["whitelist_tags"]
 
-load_dotenv()
+MAX_URLS = None
+OUTPUT_FILE = None
 
 
-def chunk(arr_range, arr_size):
-    # turn array into chunks
+print(YAML)
+
+def array_to_chunk(arr_range, arr_size):
+    """turn array to chunks
+
+    Args:
+        arr_range (array): list
+        arr_size (int): number of chunks
+
+    Returns:
+        array: array of chunks
+    """
     arr_range = iter(arr_range)
     return iter(lambda: tuple(islice(arr_range, arr_size)), ())
 
-def firefox_readability(keywords, args):
+def search_filter(data):
+    """filter results from google search
 
+    Args:
+        data (array): results from google search
 
-    rows = []
-    driver = webdriver.Firefox()
+    Returns:
+        array: filtered result
+    """
+    filtered = []
 
-    for keyword in keywords:
-        j = {"keyword": keyword}
+    for dat in data:
+        link = dat["link"]
+        if not any(blacklist in link for blacklist in BLACKLIST_URLS):
+            filtered.append(dat)
 
-        search = GoogleSearch({
-            "q": keyword, 
-            "api_key": args.serp_api_key
-        })
+    return filtered
 
-        results = search.get_json()
-        results_organic = results.get("organic_results") or []
-        # remove blacklisted URLs
-        results_links = [x for x in results_organic[1:args.max_urls+1] if not any(ext in x["link"] for ext in BLACKLIST_URLS)]
+def search_google(query):
+    """search google
 
-        for i, r in enumerate(results_links):
-            link = r["link"]
-            n = i + 1
-            print(link)
+    Args:
+        query (str): search query
 
-            driver.get("about:reader?url=" + link)
-            # force refresh, sometimes firefox reader mode freezes
-            driver.refresh()
+    Returns:
+        array: result from google search
+    """
+    data = GoogleSearch({
+        "q": query,
+        "api_key": SERP_API_KEY
+    })
 
-            # Wait for h1 or title
-            h1 = None
+    data = data.get_json().get("organic_results")
+    print(data)
+    data = search_filter(data)
+    return data
 
-            while not h1:
-                try:
-                    # check if content is available
-                    soup = BeautifulSoup(driver.page_source, features="html.parser")
-                    h1 = soup.select_one(".reader-title").text != ""
-                    # skip if content is not available in reader mode
-                    if "Failed" in soup.title.text:
-                        break
+def get_readable(driver, link):
+    """get contens of a lnik using read mode in firefox
+    https://github.com/mozilla/readability
 
-                except Exception as e:
-                    raise e
-                    # Catch any selenium errors and continue check
-                    continue
-                
-            html = None
+    Args:
+        driver (selenium): webdriver
+        link (str): website link
 
-            if h1:
-                html = sanitize_html(driver.page_source)
+    Returns:
+        str: sanitized html or None
+    """
 
-            j[f"url-{n}"] = link
-            j[f"html-{n}"] = html
+    driver.get("about:reader?url=" + link)
+    # force refresh, sometimes firefox reader mode freezes
+    driver.refresh()
+
+    # Wait for h1 or title
+    h1 = None
+
+    while not h1:
+        try:
+            # check if content is available
+            soup = BeautifulSoup(driver.page_source, features="html.parser")
+            h1 = soup.select_one(".reader-title").text != ""
+            # skip if content is not available in reader mode
+            if "Failed" in soup.title.text:
+                break
+
+        except Exception as e:
+            # Catch any selenium errors and continue check
+            continue
         
-        rows.append(j)
-    
-    driver.quit()
+    html = None
 
-    return rows
+    if h1:
+        html = sanitize_html(driver.page_source)
+
+    return html
         
 
-def sanitize_html(source):
-    # don't do anything if no source is found
-    if not source:
-        return
+def sanitize_html(page_source):
+    """Clean HTML according to whitelisted tags
+
+    Args:
+        page_source (str): driver.page_source
+
+    Returns:
+        str: santized HTML
+    """
+
+    if not page_source:
+        return None
         
-    soup = BeautifulSoup(source, features="html.parser")
+    soup = BeautifulSoup(page_source, features="html.parser")
     
     # grab only readable content
     readable = soup.select_one("#readability-page-1")
@@ -130,75 +171,47 @@ def sanitize_html(source):
 
     # minify code
     html = minify(html)
+
     return html
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog="python .")
-    
-    # path to file containing keywords separated by newlines.
-    parser.add_argument(
-        "--keywords",
-        type=str,
-        help="path to file containing keywords separated by newlines.",
-        required=True
-    )
+def extract_keywords(keywords):
+    rows = []
+    driver = webdriver.Firefox()
 
-    # define maximum workers / browsers it will user (default: max)
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="define maximum workers / browsers it will user (default: max)",
-        default=-1
-    )
-    
-    # output file .csv
-    parser.add_argument(
-        "--output-file",
-        type=str,
-        help="output file .csv",
-        default="output.csv"
-    )
+    for keyword in keywords:
+        print(keyword)
+        col = {"keyword": keyword}
 
-    # maximum URLs to search in google (default: 5) (max: -1)
-    parser.add_argument(
-        '--max-urls',
-        type=int,
-        help="maximum URLs to search in google",
-        default=5
-    )
+        # get google results
+        search_results = search_google(keyword)
+        n = 1 
+        for search in search_results:
+            # break if maximum search is reached
+            if n == MAX_URLS + 1:
+                break
 
-    # SERP API key for google search
-    # default SERP_API_KEY in .env file
-    parser.add_argument(
-        '--serp-api-key',
-        type=str,
-        help="SERP API key for google search",
-        default=os.environ.get("SERP_API_KEY")
-    )
-    
-    # get arguments
-    args = parser.parse_args()
+            link = search["link"]
+            print(link)
+            html = get_readable(driver, link)
+            
+            # add html if page is not empty
+            if html:
+                col[f"url-{n}"] = link
+                col[f"html-{n}"] = html
+                n += 1
+        rows.append(col)
+            # or continue scraping until max search reached
 
+    driver.quit()
+    return rows
 
-    # read keyword file
-    keywords = [x.strip() for x in open(args.keywords, "r").readlines()]
-
-    # split keywords into chunks X chunks
-    # modify number below to add more
-    keywords_per_chunk = 30
-    keyword_chunks = list(chunk(keywords, keywords_per_chunk))
-
-    rows = Parallel(n_jobs=args.workers)(delayed(firefox_readability)(keywords_, args) for keywords_ in keyword_chunks)
-
-    # append all rows to one result
+def export_to_csv(rows):
     result = []
     for row in rows:
         result.extend(row)
     
-
-    # finally save all result to one CSV file
-    data_file = open(args.output_file, 'w', newline='', encoding="utf-8")
-    csv_writer = csv.writer(data_file)
+    csv_file = open(OUTPUT_FILE, 'w', newline='', encoding="utf-8")
+    csv_writer = csv.writer(csv_file)
     
     count = 0
     for data in result:
@@ -208,4 +221,52 @@ if __name__ == "__main__":
             count += 1
         csv_writer.writerow(data.values())
     
-    data_file.close()
+    csv_file.close()
+
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(prog="python .")
+    
+    # path to file containing keywords separated by newlines.
+    parser.add_argument(
+        "input_file",
+        type=str,
+        help="path to file containing keywords separated by newlines.",
+    )
+
+    # output file .csv
+    parser.add_argument(
+        "output_file",
+        type=str,
+        help="output file .csv",
+        default="output.csv"
+    )
+
+    # maximum URLs to search in google (default: 5) (max: -1)
+    parser.add_argument(
+        'max_urls',
+        type=int,
+        help="maximum URLs to search in google",
+        default=5
+    )
+
+    # get arguments
+    ARGS = parser.parse_args()
+
+    MAX_URLS = ARGS.max_urls
+    OUTPUT_FILE = ARGS.output_file
+
+
+    # read keyword file
+    keywords = [x.strip() for x in open(ARGS.input_file, "r").readlines()]
+
+    # split keywords into chunks X chunks
+    # modify number below to add more
+    keywords_per_chunk = 30
+    keyword_chunks = list(array_to_chunk(keywords, keywords_per_chunk))
+
+    rows = Parallel(n_jobs=MAX_WORKERS)(delayed(extract_keywords)(keywords_) for keywords_ in keyword_chunks)
+    
+    export_to_csv(rows)

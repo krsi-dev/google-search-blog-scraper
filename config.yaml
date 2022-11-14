@@ -1,0 +1,30 @@
+---
+max_workers: -1
+max_urls: 5
+serp_api_key: 
+
+blacklist_urls: 
+  - amazon
+  - youtube
+  - pinterest
+  - book
+
+whitelist_tags:
+  - b
+  - p
+  - h1
+  - h2
+  - h3
+  - h4
+  - h5
+  - h6
+  - img
+  - ul
+  - ol
+  - li
+  - table
+  - thead
+  - tbody
+  - tr
+  - th
+  - td
