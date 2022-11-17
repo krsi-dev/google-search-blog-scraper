@@ -1,6 +1,8 @@
 ---
+# -1 maximum browsers the machine can open
 max_workers: -1
-max_urls: 5
+
+# google search
 serp_api_key:
 
 # blacklisted words when sanitizing HTML 
