@@ -1,14 +1,24 @@
 ---
 max_workers: -1
 max_urls: 5
-serp_api_key: 
+serp_api_key:
 
+# blacklisted words when sanitizing HTML 
+blacklist_text:
+  - read more
+  - more info
+  - more articles
+  - weiterlesen
+  - mehr infos
+
+# blacklisted URLs when searching for google results
 blacklist_urls: 
   - amazon
   - youtube
   - pinterest
   - book
 
+# whitelisted HTML tags
 whitelist_tags:
   - b
   - p

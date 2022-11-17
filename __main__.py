@@ -20,13 +20,12 @@ YAML = data = load(
 MAX_WORKERS = YAML["max_workers"]
 SERP_API_KEY = YAML["serp_api_key"]
 BLACKLIST_URLS = YAML["blacklist_urls"]
+BLACKLIST_TEXT = YAML["blacklist_text"]
 WHITELIST_TAGS = YAML["whitelist_tags"]
 
 MAX_URLS = None
 OUTPUT_FILE = None
 
-
-print(YAML)
 
 def array_to_chunk(arr_range, arr_size):
     """turn array to chunks
@@ -74,7 +73,6 @@ def search_google(query):
     })
 
     data = data.get_json().get("organic_results")
-    print(data)
     data = search_filter(data)
     return data
 
@@ -152,6 +150,19 @@ def sanitize_html(page_source):
         else:
             # no src gets removed
             img.decompose()
+
+    related_articles = False
+
+    for el in readable.select("p, ul"):
+        text = el.text.lower()
+        if any(blacklist in text for blacklist in BLACKLIST_TEXT):
+            print(el)
+            el.decompose()
+            next_el = el.next_sibling
+
+            if next_el:
+                next_el.decompose()
+        
 
     # sanitize
     html = clean(
